@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import io, os, sys, time, zipfile, tempfile, re, json, pickle
 from pathlib import Path
-import tensorflow as tf
 
 st.set_page_config(
     page_title="Sistem Deteksi Kemiripan KTI PMG BMKG",
@@ -354,147 +353,118 @@ def comprehensive_plagiarism_check(text_a: str, text_b: str) -> dict:
 @st.cache_resource(show_spinner=False)
 def load_lstm(weights_dir: str, tokenizer_path: str):
     """
-    Load Siamese LSTM dari bobot numpy (.npy) + tokenizer.pkl.
-    Pendekatan ini TIDAK bergantung pada versi Keras/TF —
-    bobot dibaca langsung lalu di-set ke model yang dibangun lokal.
-    Urutan BiLSTM: forward-kernel, forward-recurrent, forward-bias,
-                   backward-kernel, backward-recurrent, backward-bias
-    (terbukti menghasilkan F1=69.26% identik dengan hasil eksperimen)
+    Load Siamese LSTM menggunakan numpy murni — tanpa TensorFlow.
+    Implementasi BiLSTM forward pass dari bobot .npy secara manual.
+    Kompatibel dengan semua environment termasuk Streamlit Cloud.
     """
     try:
-        MAX_LEN   = 300
-        MAX_WORDS = 30000
-        VOCAB     = 13075  # dari tokenizer training
+        MAX_LEN = 300
+        VOCAB   = 13075
 
-        # ── Load tokenizer ────────────────────────────────────
+        # Load tokenizer
         if not os.path.exists(tokenizer_path):
             return None, None, None, (
-                f"File tidak ditemukan: {tokenizer_path}\n"
-                f"Pastikan tokenizer.pkl ada di folder models/weights_numpy/")
+                f"File tidak ditemukan: {tokenizer_path}")
         with open(tokenizer_path, 'rb') as f:
             tok = pickle.load(f)
 
-        # ── Load bobot dari numpy ─────────────────────────────
+        # Load semua bobot
         def load_npy(name):
             path = os.path.join(weights_dir, name)
             if not os.path.exists(path):
-                raise FileNotFoundError(f"File bobot tidak ditemukan: {path}")
+                raise FileNotFoundError(f"Tidak ditemukan: {path}")
             return np.load(path)
 
-        w_emb      = load_npy('emb.npy')
-        w_bili_fwd = [load_npy('bili_fwd_k.npy'),
-                      load_npy('bili_fwd_r.npy'),
-                      load_npy('bili_fwd_b.npy')]
-        w_bili_bwd = [load_npy('bili_bwd_k.npy'),
-                      load_npy('bili_bwd_r.npy'),
-                      load_npy('bili_bwd_b.npy')]
-        w_bn       = [load_npy('bn_gamma.npy'),
-                      load_npy('bn_beta.npy'),
-                      load_npy('bn_mm.npy'),
-                      load_npy('bn_mv.npy')]
-        w_dense    = [load_npy('dense_k.npy'),
-                      load_npy('dense_b.npy')]
+        w = {
+            'emb'    : load_npy('emb.npy'),
+            'fwd_k'  : load_npy('bili_fwd_k.npy'),
+            'fwd_r'  : load_npy('bili_fwd_r.npy'),
+            'fwd_b'  : load_npy('bili_fwd_b.npy'),
+            'bwd_k'  : load_npy('bili_bwd_k.npy'),
+            'bwd_r'  : load_npy('bili_bwd_r.npy'),
+            'bwd_b'  : load_npy('bili_bwd_b.npy'),
+            'bn_g'   : load_npy('bn_gamma.npy'),
+            'bn_b'   : load_npy('bn_beta.npy'),
+            'bn_mm'  : load_npy('bn_mm.npy'),
+            'bn_mv'  : load_npy('bn_mv.npy'),
+            'dn_k'   : load_npy('dense_k.npy'),
+            'dn_b'   : load_npy('dense_b.npy'),
+        }
 
-        # ── Bangun arsitektur ─────────────────────────────────
-        ia  = tf.keras.Input((MAX_LEN,), name='input_a')
-        ib  = tf.keras.Input((MAX_LEN,), name='input_b')
-        emb = tf.keras.layers.Embedding(
-                  VOCAB, 300, name='embedding')
-        bli = tf.keras.layers.Bidirectional(
-                  tf.keras.layers.LSTM(
-                      128, dropout=.2, recurrent_dropout=.1),
-                  name='bilstm')
-        bn  = tf.keras.layers.BatchNormalization(name='batch_norm')
-        dr  = tf.keras.layers.Dropout(.3, name='dropout')
-        dn  = tf.keras.layers.Dense(
-                  128, activation='relu',
-                  kernel_regularizer=tf.keras.regularizers.l2(1e-4),
-                  name='dense')
-
-        def enc(x):
-            return dn(dr(bn(bli(emb(x)))))
-
-        va  = enc(ia)
-        vb  = enc(ib)
-        cs  = tf.keras.layers.Dot(
-                  axes=1, normalize=True, name='cosine_sim')([va, vb])
-        out = tf.keras.layers.Lambda(
-                  lambda x: (x + 1.0) / 2.0, name='output')(cs)
-        mdl = tf.keras.Model(inputs=[ia, ib], outputs=out)
-
-        # ── Set bobot langsung ────────────────────────────────
-        mdl.get_layer('embedding').set_weights([w_emb])
-        # Urutan BiLSTM: fwd dulu, bwd kemudian
-        mdl.get_layer('bilstm').set_weights(
-            w_bili_fwd + w_bili_bwd)
-        mdl.get_layer('batch_norm').set_weights(w_bn)
-        mdl.get_layer('dense').set_weights(w_dense)
-
-        # ── Warmup BatchNorm ──────────────────────────────────
-        _d = np.zeros((2, MAX_LEN), dtype=np.int32)
-        _  = mdl([_d, _d], training=False)
-
-        return mdl, tok, MAX_LEN, None
+        return w, tok, MAX_LEN, None
 
     except Exception as e:
         import traceback
         return None, None, None, traceback.format_exc()
 
-def predict_lstm(ta, tb, mdl, tok, mlen, th, sw):
-    """Inferensi LSTM dengan preprocessing cerdas."""
-    from tensorflow.keras.preprocessing.sequence import pad_sequences
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
-    # Ekstrak bagian representatif dulu
-    ta_smart = extract_smart(ta, target_chars=3000)
-    tb_smart = extract_smart(tb, target_chars=3000)
+def lstm_cell(x, h, c, W, U, b):
+    z = x @ W + h @ U + b
+    i = sigmoid(z[:, :128])
+    f = sigmoid(z[:, 128:256])
+    g = np.tanh(z[:, 256:384])
+    o = sigmoid(z[:, 384:])
+    c_new = f * c + i * g
+    h_new = o * np.tanh(c_new)
+    return h_new, c_new
 
-    # Preprocessing
-    ta_proc = preprocess_lstm(ta_smart, sw)
-    tb_proc = preprocess_lstm(tb_smart, sw)
+def bilstm_np(seq, w):
+    h_f = np.zeros((1,128)); c_f = np.zeros((1,128))
+    h_b = np.zeros((1,128)); c_b = np.zeros((1,128))
+    for t in range(len(seq)):
+        h_f, c_f = lstm_cell(seq[t:t+1], h_f, c_f,
+                              w['fwd_k'], w['fwd_r'], w['fwd_b'])
+    for t in range(len(seq)-1, -1, -1):
+        h_b, c_b = lstm_cell(seq[t:t+1], h_b, c_b,
+                              w['bwd_k'], w['bwd_r'], w['bwd_b'])
+    return np.concatenate([h_f, h_b], axis=1)
 
+def bn_infer(x, g, b, mm, mv, eps=1e-3):
+    return g * (x - mm) / np.sqrt(mv + eps) + b
+
+def encode_vec(token_ids, w):
+    non_pad = token_ids[token_ids > 0]
+    if len(non_pad) == 0:
+        return np.zeros(128)
+    emb  = w['emb'][non_pad]
+    bili = bilstm_np(emb, w)
+    bn   = bn_infer(bili, w['bn_g'], w['bn_b'], w['bn_mm'], w['bn_mv'])
+    return np.maximum(0, bn @ w['dn_k'] + w['dn_b'])[0]
+
+def cos_sim_np(va, vb):
+    na = np.linalg.norm(va); nb = np.linalg.norm(vb)
+    if na < 1e-9 or nb < 1e-9: return 0.5
+    return float((np.dot(va, vb) / (na * nb) + 1.0) / 2.0)
+
+def pad_seq(seq, maxlen=300):
+    arr = np.zeros(maxlen, dtype=np.int32)
+    arr[:min(len(seq), maxlen)] = seq[:maxlen]
+    return arr
+
+def predict_lstm(ta, tb, w, tok, mlen, th, sw):
+    """Inferensi Siamese LSTM — numpy only, tanpa TensorFlow."""
+    ta_proc = preprocess_lstm(ta, sw)
+    tb_proc = preprocess_lstm(tb, sw)
     stats_a = get_stats(ta, ta_proc)
     stats_b = get_stats(tb, tb_proc)
-
-    def enc(texts):
-        seqs = tok.texts_to_sequences([str(t) for t in texts])
-        return pad_sequences(seqs, maxlen=mlen, padding='post', truncating='post')
-
-    X1 = enc([ta_proc]); X2 = enc([tb_proc])
-    # Pastikan model dalam inference mode (bukan training mode)
-    # Ini penting untuk BatchNormalization agar menggunakan
-    # moving average dari training, bukan statistik batch saat ini
-    # Gunakan training=False agar BatchNorm pakai moving average
-    score = float(mdl([X1, X2], training=False).numpy()[0][0])
-
-    # Model Siamese LSTM dengan Focal Loss menghasilkan distribusi BINARY:
-    # - Skor 0.50 = TIDAK MIRIP (minimum model, akibat ReLU)
-    # - Skor 0.59-1.00 = MIRIP (hanya pasangan yang benar-benar mirip)
-    # - Skor 1.00 = IDENTIK SEMPURNA
-    # Threshold 0.59 (hasil kalibrasi grid search) tetap digunakan langsung.
+    X1 = pad_seq(tok.texts_to_sequences([ta_proc])[0], mlen)
+    X2 = pad_seq(tok.texts_to_sequences([tb_proc])[0], mlen)
+    va    = encode_vec(X1, w)
+    vb    = encode_vec(X2, w)
+    score = cos_sim_np(va, vb)
     label = "MIRIP" if score >= th else "TIDAK MIRIP"
-
-    # Hitung confidence untuk UI yang lebih informatif
-    if score >= th:
-        # Range [th, 1.0] → confidence [0%, 100%]
-        confidence = (score - th) / (1.0 - th) * 100
-    else:
-        # Range [0.5, th) → confidence negatif (tidak mirip)
-        confidence = 0.0
-
+    conf  = max(0.0, (score - th) / (1.0 - th) * 100) if score >= th else 0.0
     return {
-        "score"      : round(score, 4),
-        "threshold"  : th,
-        "label"      : label,
-        "confidence" : round(confidence, 1),
-        "model"      : "Siamese LSTM",
-        "stats_a"    : stats_a,
-        "stats_b"    : stats_b,
-        "text_a_processed": ta_proc[:300],
-        "text_b_processed": tb_proc[:300],
+        "score"     : round(score, 4),
+        "threshold" : th,
+        "label"     : label,
+        "confidence": round(conf, 1),
+        "model"     : "Siamese LSTM",
+        "stats_a"   : stats_a,
+        "stats_b"   : stats_b,
     }
-
-
-# ══ UI HELPERS ════════════════════════════════════════════════
 
 def gauge(score, threshold, label, model_name, confidence=0):
     color  = "#22c55e" if label=="MIRIP" else "#64748b"
