@@ -361,12 +361,42 @@ def load_lstm(weights_dir: str, tokenizer_path: str):
         MAX_LEN = 300
         VOCAB   = 13075
 
-        # Load tokenizer
+        # Load tokenizer dari JSON (tanpa Keras dependency)
         if not os.path.exists(tokenizer_path):
-            return None, None, None, (
-                f"File tidak ditemukan: {tokenizer_path}")
-        with open(tokenizer_path, 'rb') as f:
-            tok = pickle.load(f)
+            # Coba .json jika .pkl tidak ada
+            json_path = tokenizer_path.replace('.pkl', '.json')
+            if os.path.exists(json_path):
+                tokenizer_path = json_path
+            else:
+                return None, None, None, (
+                    f"File tidak ditemukan: {tokenizer_path}")
+
+        if tokenizer_path.endswith('.json'):
+            import json as _json
+            with open(tokenizer_path, 'r', encoding='utf-8') as f:
+                tok_data = _json.load(f)
+            # Buat objek tokenizer sederhana dari dict
+            class SimpleTokenizer:
+                def __init__(self, data):
+                    self.word_index = data['word_index']
+                    self.num_words  = data.get('num_words', 30000)
+                    self.oov_token  = data.get('oov_token', '<OOV>')
+                def texts_to_sequences(self, texts):
+                    results = []
+                    for text in texts:
+                        seq = []
+                        for word in str(text).split():
+                            idx = self.word_index.get(word)
+                            if idx and idx < self.num_words:
+                                seq.append(idx)
+                            else:
+                                seq.append(1)  # OOV
+                        results.append(seq)
+                    return results
+            tok = SimpleTokenizer(tok_data)
+        else:
+            with open(tokenizer_path, 'rb') as f:
+                tok = pickle.load(f)
 
         # Load semua bobot
         def load_npy(name):
@@ -565,7 +595,7 @@ def sidebar():
               help="Folder berisi emb.npy, bili_*.npy, bn_*.npy, dense_*.npy")
         csv = st.sidebar.text_input(
               "Path tokenizer (.pkl)",
-              value="models/weights_numpy/tokenizer.pkl",
+              value="models/weights_numpy/tokenizer.json",
               help="File tokenizer.pkl dari folder weights_numpy")
         th  = st.sidebar.slider("Threshold LSTM", .30, .90,
               value=.59, step=.01,
