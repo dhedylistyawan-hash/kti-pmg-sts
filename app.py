@@ -598,8 +598,8 @@ def sidebar():
               value="models/weights_numpy/tokenizer.json",
               help="File tokenizer.pkl dari folder weights_numpy")
         th  = st.sidebar.slider("Threshold LSTM", .30, .90,
-              value=.59, step=.01,
-              help="Default: 0,59 (kalibrasi optimal grid search)")
+              value=.60, step=.01,
+              help="Default: 0,60 (kalibrasi optimal grid search)")
     else:
         mp = csv = None
         th = st.sidebar.slider("Threshold TF-IDF", .05, .50,
@@ -609,9 +609,9 @@ def sidebar():
     st.sidebar.markdown("### 📊 Info Model")
     info = {
         "🏆 Siamese LSTM (Rekomendasi)": {
-            "F1-Score":"69,26%","Accuracy":"93,68%",
-            "Recall":"70,80%","Ukuran":"16,77 MB",
-            "GPU":"Tidak perlu","Threshold":"0,59",
+            "F1-Score":"64,84%","Accuracy":"91,99%",
+            "Recall":"73,45%","Ukuran":"16,77 MB",
+            "GPU":"Tidak perlu","Threshold":"0,60",
         },
         "📊 TF-IDF Baseline": {
             "F1-Score":"—","Accuracy":"—","Recall":"—",
@@ -1073,7 +1073,7 @@ def tab_panduan():
            "gempa bumi" bisa mendapat skor rendah jika metode dan
            hasil penelitiannya berbeda.
 
-        3. **Threshold 0,59** — Dikalibrasi pada dataset 87 KTI.
+        3. **Threshold 0,60** — Dikalibrasi pada dataset 87 KTI.
            Skor 0,50 berarti model tidak yakin (borderline).
 
         **Interpretasi skor Siamese LSTM:**
@@ -1085,8 +1085,8 @@ def tab_panduan():
         |---|---|
         | **1,0000** | Identik sempurna |
         | **0,80 – 1,00** | Sangat Mirip → Perlu investigasi mendalam |
-        | **0,59 – 0,80** | Mirip → Review manual Tim Penilai |
-        | **0,50 – 0,59** | Tidak Mirip (di bawah threshold) |
+        | **0,60 – 0,80** | Mirip → Review manual Tim Penilai |
+        | **0,50 – 0,60** | Tidak Mirip (di bawah threshold) |
         | **0,5000** | Tidak Mirip sama sekali (nilai minimum model) |
 
         > **Mengapa skor minimum 0,50?**
@@ -1094,7 +1094,7 @@ def tab_panduan():
         > sehingga cosine similarity ≥ 0, dan output (cos+1)/2 ≥ 0,50.
         > Skor 0,50 bukan berarti "mirip 50%" melainkan
         > **"model memutuskan: tidak ada kemiripan semantik"**.
-        > Threshold 0,59 dikalibrasi untuk memisahkan dua kelompok ini.
+        > Threshold 0,60 dikalibrasi untuk memisahkan dua kelompok ini.
         """)
 
     with st.expander("⚡ Mengapa Pertama Kali Lambat (~36 detik)?"):
@@ -1109,8 +1109,8 @@ def tab_panduan():
         st.dataframe(pd.DataFrame({
             "Aspek": ["F1-Score","Accuracy","Recall","Ukuran Model",
                       "GPU Diperlukan","Waktu Inferensi","Threshold"],
-            "Siamese LSTM ⭐": ["69,26%","93,68%","70,80%","16,77 MB",
-                                "Tidak","~2 detik (setelah cache)","0,59"],
+            "Siamese LSTM ⭐": ["64,84%","91,99%","73,45%","16,77 MB",
+                                "Tidak","~2 detik (setelah cache)","0,60"],
             "TF-IDF Baseline": ["—","—","—","< 1 MB","Tidak","< 1 detik","0,1753"],
         }), use_container_width=True, hide_index=True)
 
@@ -1131,8 +1131,7 @@ def main():
     st.markdown("""
     <div class='main-header'>
       <h1>🔬 Sistem Deteksi Kemiripan Semantik KTI PMG BMKG</h1>
-      <p>Berbasis Siamese LSTM &amp; Siamese IndoBERT &nbsp;·&nbsp;
-         Siamese LSTM: F1=69,26% &nbsp;|&nbsp; Siamese IndoBERT: F1=63,68% &nbsp;|&nbsp;
+      <p>Model Deployment: Siamese LSTM (F1=64,84%) &amp; TF-IDF Baseline &nbsp;·&nbsp;
          v2.0 — Strategi Ekstraksi Cerdas</p>
     </div>
     """, unsafe_allow_html=True)
